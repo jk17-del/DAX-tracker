@@ -1,10 +1,12 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
+import time
 
-st.set_page_config(page_title="DAX Trend Scanner (Stooq)", layout="wide")
+st.set_page_config(page_title="DAX Trend Scanner V2.1", layout="wide")
 
-st.title("📈 DAX Trend Scanner (stabile Version)")
+st.title("📈 DAX Trend Scanner V2.1")
 
 # -----------------------------
 # SETTINGS
@@ -17,35 +19,38 @@ momentum_days = st.sidebar.slider("Momentum Tage", 5, 60, 20)
 top_n = st.sidebar.slider("Top N Aktien", 5, 20, 10)
 
 # -----------------------------
-# DAX TICKER (Stooq Format!)
+# DAX TICKER
 # -----------------------------
-DAX_TICKERS = [
-    "ads.de","air.de","alv.de","bas.de","bayn.de","bei.de",
-    "bmw.de","bnr.de","cbk.de","con.de","db1.de","dbk.de",
-    "dhl.de","dtg.de","dte.de","enr.de","eoan.de","fme.de",
-    "fre.de","hei.de","hen3.de","ifx.de","lin.de","mbg.de",
-    "mrk.de","mtx.de","muv2.de","p911.de","qia.de","rwe.de",
-    "sap.de","sie.de","sy1.de","vow3.de","zal.de","vna.de"
-]
+@st.cache_data(ttl=86400)
+def get_dax_tickers():
+    return [
+        "ADS.DE","AIR.DE","ALV.DE","BAS.DE","BAYN.DE","BEI.DE",
+        "BMW.DE","BNR.DE","CBK.DE","CON.DE","DB1.DE","DBK.DE",
+        "DHL.DE","DTG.DE","DTE.DE","ENR.DE","EOAN.DE","FME.DE",
+        "FRE.DE","HEI.DE","HEN3.DE","IFX.DE","LIN.DE","MBG.DE",
+        "MRK.DE","MTX.DE","MUV2.DE","P911.DE","QIA.DE","RWE.DE",
+        "SAP.DE","SIE.DE","SY1.DE","VOW3.DE","ZAL.DE","VNA.DE"
+    ]
 
-st.write(f"📊 {len(DAX_TICKERS)} DAX Aktien")
+dax_tickers = get_dax_tickers()
+
+st.write(f"📊 {len(dax_tickers)} DAX Aktien im Universe")
 
 # -----------------------------
-# DATA LOAD (STOOQ)
+# BULK DATA LOAD (🔥 FIX)
 # -----------------------------
 @st.cache_data(ttl=3600)
-def load_data(ticker):
-    url = f"https://stooq.com/q/d/l/?s={ticker}&i=d"
-    df = pd.read_csv(url)
-
-    if df.empty:
+def load_bulk_data(tickers):
+    try:
+        data = yf.download(
+            tickers,
+            period="1y",
+            group_by="ticker",
+            threads=False
+        )
+        return data
+    except:
         return None
-
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.sort_values("Date")
-    df = df.set_index("Date")
-
-    return df
 
 # -----------------------------
 # RSI
@@ -60,11 +65,11 @@ def compute_rsi(series, period=14):
 # -----------------------------
 # ANALYSE
 # -----------------------------
-def analyze_stock(ticker):
+def analyze_stock(ticker, data):
     try:
-        df = load_data(ticker)
+        df = data[ticker].copy()
 
-        if df is None or len(df) < ma_long:
+        if df is None or df.empty:
             return None
 
         df["MA_short"] = df["Close"].rolling(ma_short).mean()
@@ -79,11 +84,14 @@ def analyze_stock(ticker):
 
         latest = df.iloc[-1]
 
+        # Kriterien
         trend = latest["Close"] > latest["MA_short"] > latest["MA_long"]
         momentum = latest["Momentum"] > 0
         ma_slope = df["MA_short"].iloc[-1] > df["MA_short"].iloc[-5]
 
+        # Score
         score = 0
+
         if trend:
             score += 3
         if momentum:
@@ -95,14 +103,15 @@ def analyze_stock(ticker):
         score += max(0, distance * 10)
 
         return {
-            "Ticker": ticker.upper(),
+            "Ticker": ticker,
             "Preis": round(latest["Close"], 2),
             "Momentum": round(latest["Momentum"], 3),
             "RSI": round(latest["RSI"], 1),
-            "Score": round(score, 2)
+            "Score": round(score, 2),
+            "Trend": trend
         }
 
-    except:
+    except Exception as e:
         return None
 
 # -----------------------------
@@ -110,19 +119,34 @@ def analyze_stock(ticker):
 # -----------------------------
 if st.button("🔍 Scan starten"):
 
+    st.write("⏳ Lade Marktdaten...")
+
+    data = load_bulk_data(dax_tickers)
+
+    if data is None or len(data) == 0:
+        st.error("❌ Daten konnten nicht geladen werden (Yahoo blockiert evtl.)")
+        st.stop()
+
     results = []
+    failed = 0
+
     progress = st.progress(0)
 
-    for i, ticker in enumerate(DAX_TICKERS):
-        res = analyze_stock(ticker)
+    for i, ticker in enumerate(dax_tickers):
+        res = analyze_stock(ticker, data)
 
         if res:
             results.append(res)
+        else:
+            failed += 1
 
-        progress.progress((i + 1) / len(DAX_TICKERS))
+        progress.progress((i + 1) / len(dax_tickers))
 
+    # -----------------------------
+    # FEHLERBEHANDLUNG
+    # -----------------------------
     if len(results) == 0:
-        st.error("❌ Keine Daten verfügbar (selten bei Stooq)")
+        st.error("❌ Keine Daten analysierbar – Yahoo blockiert wahrscheinlich")
         st.stop()
 
     df_results = pd.DataFrame(results)
@@ -130,26 +154,40 @@ if st.button("🔍 Scan starten"):
     st.subheader("📊 Alle Aktien")
     st.dataframe(df_results)
 
+    # Ranking
     df_sorted = df_results.sort_values("Score", ascending=False)
     top_df = df_sorted.head(top_n)
 
     st.subheader("🚀 Top Rising Stocks")
     st.dataframe(top_df)
 
-    st.success(f"Top {len(top_df)} Aktien")
+    st.success(f"Top {len(top_df)} Aktien nach Score")
+    st.info(f"⚠️ Fehlgeschlagen: {failed} Ticker")
 
 # -----------------------------
-# CHART
+# EINZELCHART
 # -----------------------------
 st.subheader("📉 Einzelanalyse")
 
-selected = st.selectbox("Wähle Aktie", DAX_TICKERS)
+selected = st.selectbox("Wähle Aktie", dax_tickers)
 
 if selected:
-    df = load_data(selected)
+    single_data = yf.download(selected, period="6mo", progress=False)
 
-    if df is not None:
-        df["MA_short"] = df["Close"].rolling(ma_short).mean()
-        df["MA_long"] = df["Close"].rolling(ma_long).mean()
+    if single_data is not None and not single_data.empty:
+        single_data["MA_short"] = single_data["Close"].rolling(ma_short).mean()
+        single_data["MA_long"] = single_data["Close"].rolling(ma_long).mean()
 
-        st.line_chart(df[["Close", "MA_short", "MA_long"]])
+        st.line_chart(single_data[["Close", "MA_short", "MA_long"]])
+    else:
+        st.warning("Keine Daten verfügbar")
+
+# -----------------------------
+# CACHE RESET + DEBUG
+# -----------------------------
+if st.sidebar.button("🔄 Cache leeren"):
+    st.cache_data.clear()
+    st.success("Cache geleert!")
+
+with st.expander("🛠 Debug"):
+    st.write(dax_tickers)
