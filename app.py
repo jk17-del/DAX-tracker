@@ -3,9 +3,9 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="SDAX Trend Scanner V2", layout="wide")
+st.set_page_config(page_title="DAX Trend Scanner V2", layout="wide")
 
-st.title("📈 SDAX Trend Scanner V2")
+st.title("📈 DAX Trend Scanner V2")
 
 # -----------------------------
 # SETTINGS
@@ -15,44 +15,35 @@ st.sidebar.header("⚙️ Einstellungen")
 ma_short = st.sidebar.slider("MA Kurzfristig", 10, 100, 50)
 ma_long = st.sidebar.slider("MA Langfristig", 100, 300, 200)
 momentum_days = st.sidebar.slider("Momentum Tage", 5, 60, 20)
-
 top_n = st.sidebar.slider("Top N Aktien", 5, 20, 10)
 
 # -----------------------------
-# FALLBACK SDAX
-# -----------------------------
-FALLBACK_SDAX = [
-    "1U1.DE", "ADN1.DE", "AOX.DE", "AT1.DE", "BVB.DE",
-    "CE2.DE", "DUE.DE", "EKT.DE", "EVT.DE", "GFT.DE",
-    "HDD.DE", "HFG.DE", "HBH.DE", "KWS.DE", "NEM.DE",
-    "PNE3.DE", "S92.DE", "SGL.DE", "SIX2.DE"
-]
-
-# -----------------------------
-# SCRAPER + CACHE
+# DAX TICKER (stabil)
 # -----------------------------
 @st.cache_data(ttl=86400)
-def get_sdax_tickers():
-    try:
-        url = "https://de.finance.yahoo.com/quote/%5ESDAXI/components/"
-        tables = pd.read_html(url)
-        df = tables[0]
-        tickers = df["Symbol"].dropna().tolist()
-        tickers = [t for t in tickers if ".DE" in t]
+def get_dax_tickers():
+    return [
+        "ADS.DE","AIR.DE","ALV.DE","BAS.DE","BAYN.DE","BEI.DE",
+        "BMW.DE","BNR.DE","CBK.DE","CON.DE","DB1.DE","DBK.DE",
+        "DHL.DE","DTG.DE","DTE.DE","ENR.DE","EOAN.DE","FME.DE",
+        "FRE.DE","HEI.DE","HEN3.DE","IFX.DE","LIN.DE","MBG.DE",
+        "MRK.DE","MTX.DE","MUV2.DE","P911.DE","QIA.DE","RWE.DE",
+        "SAP.DE","SIE.DE","SY1.DE","VOW3.DE","ZAL.DE","VNA.DE"
+    ]
 
-        if len(tickers) < 20:
-            return FALLBACK_SDAX
+dax_tickers = get_dax_tickers()
 
-        return tickers
-    except:
-        return FALLBACK_SDAX
-
-sdax_tickers = get_sdax_tickers()
-
-st.write(f"📊 {len(sdax_tickers)} Aktien im Universe")
+st.write(f"📊 {len(dax_tickers)} DAX Aktien im Universe")
 
 # -----------------------------
-# INDICATORS
+# CACHE FÜR PREISDATEN
+# -----------------------------
+@st.cache_data(ttl=3600)
+def load_data(ticker):
+    return yf.download(ticker, period="1y", progress=False)
+
+# -----------------------------
+# RSI
 # -----------------------------
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -66,24 +57,30 @@ def compute_rsi(series, period=14):
 # -----------------------------
 def analyze_stock(ticker):
     try:
-        df = yf.download(ticker, period="1y", progress=False)
+        df = load_data(ticker)
 
-        if df.empty or len(df) < ma_long:
+        if df is None or df.empty:
             return None
 
+        # Indikatoren
         df["MA_short"] = df["Close"].rolling(ma_short).mean()
         df["MA_long"] = df["Close"].rolling(ma_long).mean()
         df["Momentum"] = df["Close"].pct_change(momentum_days)
         df["RSI"] = compute_rsi(df["Close"])
 
+        df = df.dropna()
+
+        if df.empty:
+            return None
+
         latest = df.iloc[-1]
 
-        # --- Kriterien ---
+        # Kriterien
         trend = latest["Close"] > latest["MA_short"] > latest["MA_long"]
         momentum = latest["Momentum"] > 0
         ma_slope = df["MA_short"].iloc[-1] > df["MA_short"].iloc[-5]
 
-        # --- Score (NEU 🔥) ---
+        # Score
         score = 0
 
         if trend:
@@ -93,7 +90,7 @@ def analyze_stock(ticker):
         if ma_slope:
             score += 2
 
-        # Abstand zum MA als Stärke
+        # Stärke (Abstand zum MA)
         distance = (latest["Close"] - latest["MA_short"]) / latest["MA_short"]
         score += max(0, distance * 10)
 
@@ -110,21 +107,21 @@ def analyze_stock(ticker):
         return None
 
 # -----------------------------
-# RUN SCAN
+# SCAN
 # -----------------------------
 if st.button("🔍 Scan starten"):
 
     results = []
     progress = st.progress(0)
 
-    for i, ticker in enumerate(sdax_tickers):
+    for i, ticker in enumerate(dax_tickers):
         res = analyze_stock(ticker)
+
         if res:
             results.append(res)
 
-        progress.progress((i + 1) / len(sdax_tickers))
+        progress.progress((i + 1) / len(dax_tickers))
 
-    # 🔥 WICHTIG: Fehler-Fix
     if len(results) == 0:
         st.error("❌ Keine Daten geladen – prüfe Internet/API")
         st.stop()
@@ -134,11 +131,8 @@ if st.button("🔍 Scan starten"):
     st.subheader("📊 Alle Aktien")
     st.dataframe(df_results)
 
-    # -----------------------------
-    # RANKING statt Boolean Filter
-    # -----------------------------
+    # Ranking
     df_sorted = df_results.sort_values("Score", ascending=False)
-
     top_df = df_sorted.head(top_n)
 
     st.subheader("🚀 Top Rising Stocks")
@@ -151,13 +145,25 @@ if st.button("🔍 Scan starten"):
 # -----------------------------
 st.subheader("📉 Einzelanalyse")
 
-selected = st.selectbox("Wähle Aktie", sdax_tickers)
+selected = st.selectbox("Wähle Aktie", dax_tickers)
 
 if selected:
-    data = yf.download(selected, period="6mo", progress=False)
+    data = load_data(selected)
 
-    if not data.empty:
+    if data is not None and not data.empty:
         data["MA_short"] = data["Close"].rolling(ma_short).mean()
         data["MA_long"] = data["Close"].rolling(ma_long).mean()
 
         st.line_chart(data[["Close", "MA_short", "MA_long"]])
+    else:
+        st.warning("Keine Daten verfügbar")
+
+# -----------------------------
+# DEBUG / CACHE RESET
+# -----------------------------
+if st.sidebar.button("🔄 Cache leeren"):
+    st.cache_data.clear()
+    st.success("Cache geleert!")
+
+with st.expander("🛠 Debug"):
+    st.write(dax_tickers)
