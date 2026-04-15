@@ -3,22 +3,12 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="SDAX Trend Scanner", layout="wide")
+st.set_page_config(page_title="SDAX Trend Scanner V2", layout="wide")
 
-st.title("📈 SDAX Rising Stocks Scanner")
-
-# -----------------------------
-# SDAX Ticker Liste (Beispiel)
-# -----------------------------
-# Hinweis: Yahoo Finance nutzt .DE für deutsche Aktien
-sdax_tickers = [
-    "AT1.DE", "BVB.DE", "EVT.DE", "SIX2.DE", "S92.DE",
-    "DRW3.DE", "FNTN.DE", "GFT.DE", "HFG.DE", "JEN.DE",
-    "KWS.DE", "NEM.DE", "PNE3.DE", "RHM.DE", "SGL.DE"
-]
+st.title("📈 SDAX Trend Scanner V2")
 
 # -----------------------------
-# Parameter Sidebar
+# SETTINGS
 # -----------------------------
 st.sidebar.header("⚙️ Einstellungen")
 
@@ -26,71 +16,105 @@ ma_short = st.sidebar.slider("MA Kurzfristig", 10, 100, 50)
 ma_long = st.sidebar.slider("MA Langfristig", 100, 300, 200)
 momentum_days = st.sidebar.slider("Momentum Tage", 5, 60, 20)
 
-use_rsi = st.sidebar.checkbox("RSI Filter (<70)", value=True)
+top_n = st.sidebar.slider("Top N Aktien", 5, 20, 10)
 
 # -----------------------------
-# Hilfsfunktionen
+# FALLBACK SDAX
+# -----------------------------
+FALLBACK_SDAX = [
+    "1U1.DE", "ADN1.DE", "AOX.DE", "AT1.DE", "BVB.DE",
+    "CE2.DE", "DUE.DE", "EKT.DE", "EVT.DE", "GFT.DE",
+    "HDD.DE", "HFG.DE", "HBH.DE", "KWS.DE", "NEM.DE",
+    "PNE3.DE", "S92.DE", "SGL.DE", "SIX2.DE"
+]
+
+# -----------------------------
+# SCRAPER + CACHE
+# -----------------------------
+@st.cache_data(ttl=86400)
+def get_sdax_tickers():
+    try:
+        url = "https://de.finance.yahoo.com/quote/%5ESDAXI/components/"
+        tables = pd.read_html(url)
+        df = tables[0]
+        tickers = df["Symbol"].dropna().tolist()
+        tickers = [t for t in tickers if ".DE" in t]
+
+        if len(tickers) < 20:
+            return FALLBACK_SDAX
+
+        return tickers
+    except:
+        return FALLBACK_SDAX
+
+sdax_tickers = get_sdax_tickers()
+
+st.write(f"📊 {len(sdax_tickers)} Aktien im Universe")
+
+# -----------------------------
+# INDICATORS
 # -----------------------------
 def compute_rsi(series, period=14):
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = -delta.clip(upper=0).rolling(period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+# -----------------------------
+# ANALYSE
+# -----------------------------
 def analyze_stock(ticker):
     try:
         df = yf.download(ticker, period="1y", progress=False)
-        if df.empty:
+
+        if df.empty or len(df) < ma_long:
             return None
 
         df["MA_short"] = df["Close"].rolling(ma_short).mean()
         df["MA_long"] = df["Close"].rolling(ma_long).mean()
-
         df["Momentum"] = df["Close"].pct_change(momentum_days)
-
         df["RSI"] = compute_rsi(df["Close"])
 
         latest = df.iloc[-1]
 
-        # Trend Bedingungen
-        trend = (
-            latest["Close"] > latest["MA_short"] > latest["MA_long"]
-        )
-
-        # Momentum
+        # --- Kriterien ---
+        trend = latest["Close"] > latest["MA_short"] > latest["MA_long"]
         momentum = latest["Momentum"] > 0
-
-        # MA Steigung
         ma_slope = df["MA_short"].iloc[-1] > df["MA_short"].iloc[-5]
 
-        # RSI
-        rsi_ok = True
-        if use_rsi:
-            rsi_ok = latest["RSI"] < 70
+        # --- Score (NEU 🔥) ---
+        score = 0
 
-        is_rising = trend and momentum and ma_slope and rsi_ok
+        if trend:
+            score += 3
+        if momentum:
+            score += 2
+        if ma_slope:
+            score += 2
+
+        # Abstand zum MA als Stärke
+        distance = (latest["Close"] - latest["MA_short"]) / latest["MA_short"]
+        score += max(0, distance * 10)
 
         return {
             "Ticker": ticker,
             "Preis": round(latest["Close"], 2),
             "Momentum": round(latest["Momentum"], 3),
             "RSI": round(latest["RSI"], 1),
-            "Trend": trend,
-            "Steigend": ma_slope,
-            "Rising": is_rising
+            "Score": round(score, 2),
+            "Trend": trend
         }
 
-    except Exception as e:
+    except:
         return None
 
 # -----------------------------
-# Analyse starten
+# RUN SCAN
 # -----------------------------
 if st.button("🔍 Scan starten"):
 
     results = []
-
     progress = st.progress(0)
 
     for i, ticker in enumerate(sdax_tickers):
@@ -100,21 +124,30 @@ if st.button("🔍 Scan starten"):
 
         progress.progress((i + 1) / len(sdax_tickers))
 
+    # 🔥 WICHTIG: Fehler-Fix
+    if len(results) == 0:
+        st.error("❌ Keine Daten geladen – prüfe Internet/API")
+        st.stop()
+
     df_results = pd.DataFrame(results)
 
-    st.subheader("📊 Alle analysierten Aktien")
+    st.subheader("📊 Alle Aktien")
     st.dataframe(df_results)
 
-    # Filter Rising Stocks
-    rising_df = df_results[df_results["Rising"] == True]
+    # -----------------------------
+    # RANKING statt Boolean Filter
+    # -----------------------------
+    df_sorted = df_results.sort_values("Score", ascending=False)
 
-    st.subheader("🚀 Rising Stocks")
-    st.dataframe(rising_df)
+    top_df = df_sorted.head(top_n)
 
-    st.success(f"{len(rising_df)} Aktien im Aufwärtstrend gefunden")
+    st.subheader("🚀 Top Rising Stocks")
+    st.dataframe(top_df)
+
+    st.success(f"Top {len(top_df)} Aktien nach Score")
 
 # -----------------------------
-# Zusatz: Chart anzeigen
+# EINZELCHART
 # -----------------------------
 st.subheader("📉 Einzelanalyse")
 
@@ -123,7 +156,8 @@ selected = st.selectbox("Wähle Aktie", sdax_tickers)
 if selected:
     data = yf.download(selected, period="6mo", progress=False)
 
-    data["MA_short"] = data["Close"].rolling(ma_short).mean()
-    data["MA_long"] = data["Close"].rolling(ma_long).mean()
+    if not data.empty:
+        data["MA_short"] = data["Close"].rolling(ma_short).mean()
+        data["MA_long"] = data["Close"].rolling(ma_long).mean()
 
-    st.line_chart(data[["Close", "MA_short", "MA_long"]])
+        st.line_chart(data[["Close", "MA_short", "MA_long"]])
