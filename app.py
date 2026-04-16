@@ -60,6 +60,45 @@ DAX_TICKERS = [
     "SAP.DE","SIE.DE","SY1.DE","VOW3.DE","ZAL.DE","VNA.DE"
 ]
 
+DAX_NAMES = {
+    "ADS.DE":  "adidas AG",
+    "AIR.DE":  "Airbus SE",
+    "ALV.DE":  "Allianz SE",
+    "BAS.DE":  "BASF SE",
+    "BAYN.DE": "Bayer AG",
+    "BEI.DE":  "Beiersdorf AG",
+    "BMW.DE":  "BMW AG",
+    "BNR.DE":  "Brenntag SE",
+    "CBK.DE":  "Commerzbank AG",
+    "CON.DE":  "Continental AG",
+    "DB1.DE":  "Deutsche Börse AG",
+    "DBK.DE":  "Deutsche Bank AG",
+    "DHL.DE":  "DHL Group",
+    "DTG.DE":  "Daimler Truck AG",
+    "DTE.DE":  "Deutsche Telekom AG",
+    "ENR.DE":  "Siemens Energy AG",
+    "EOAN.DE": "E.ON SE",
+    "FME.DE":  "Fresenius Medical Care",
+    "FRE.DE":  "Fresenius SE",
+    "HEI.DE":  "Heidelberg Materials AG",
+    "HEN3.DE": "Henkel AG & Co. KGaA",
+    "IFX.DE":  "Infineon Technologies AG",
+    "LIN.DE":  "Linde plc",
+    "MBG.DE":  "Mercedes-Benz Group AG",
+    "MRK.DE":  "Merck KGaA",
+    "MTX.DE":  "MTU Aero Engines AG",
+    "MUV2.DE": "Munich Re",
+    "P911.DE": "Porsche AG",
+    "QIA.DE":  "Qiagen NV",
+    "RWE.DE":  "RWE AG",
+    "SAP.DE":  "SAP SE",
+    "SIE.DE":  "Siemens AG",
+    "SY1.DE":  "Symrise AG",
+    "VOW3.DE": "Volkswagen AG",
+    "ZAL.DE":  "Zalando SE",
+    "VNA.DE":  "Vonovia SE",
+}
+
 # ── Indicator Functions ───────────────────────────────────────────────────────
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -185,6 +224,7 @@ def analyze(ticker, raw, ma_short, ma_long, momentum_days, rsi_ob, rsi_os):
 
     return {
         "Ticker"        : ticker,
+        "Name"          : DAX_NAMES.get(ticker, ticker),
         "Signal"        : signal,
         "Score"         : round(score, 1),
         "Preis"         : round(float(r["Close"]), 2),
@@ -326,7 +366,7 @@ if "results" in st.session_state:
     st.subheader(f"🚀 Top {top_n} Aktien nach Score")
 
     top_df = df_sorted.head(top_n).reset_index(drop=True)
-    display_cols = ["Ticker","Signal","Score","Preis","RSI","Momentum %","52w Hoch %","Kaufsignale"]
+    display_cols = ["Ticker","Name","Signal","Score","Preis","RSI","Momentum %","52w Hoch %","Kaufsignale"]
 
     st.dataframe(
         top_df[display_cols].reset_index(drop=True),
@@ -362,13 +402,23 @@ if "results" in st.session_state:
 
     with tab1:
         if buy_tickers:
-            sel = st.selectbox("Kaufsignal-Aktie wählen", buy_tickers, key="sel_buy")
+            sel = st.selectbox(
+                "Kaufsignal-Aktie wählen",
+                buy_tickers,
+                format_func=lambda t: f"{t} – {DAX_NAMES.get(t, t)}",
+                key="sel_buy"
+            )
         else:
             st.info("Keine Kaufsignale im aktuellen Scan.")
             sel = None
 
     with tab2:
-        sel2 = st.selectbox("Aktie wählen", [r["Ticker"] for r in results], key="sel_all")
+        sel2 = st.selectbox(
+            "Aktie wählen",
+            [r["Ticker"] for r in results],
+            format_func=lambda t: f"{t} – {DAX_NAMES.get(t, t)}",
+            key="sel_all"
+        )
         sel  = sel2
 
     if sel:
@@ -396,7 +446,7 @@ else:
     # Still allow manual chart lookup without scan
     st.divider()
     st.subheader("📉 Schnellanalyse (ohne Scan)")
-    sel_quick = st.selectbox("Aktie wählen", DAX_TICKERS)
+    sel_quick = st.selectbox("Aktie wählen", DAX_TICKERS, format_func=lambda t: f"{t} – {DAX_NAMES.get(t, t)}")
     if sel_quick and st.button("Chart laden"):
         with st.spinner("Lade Daten…"):
             df_q = yf.download(sel_quick, period="6mo", progress=False)
