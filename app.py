@@ -328,16 +328,17 @@ if "results" in st.session_state:
     top_df = df_sorted.head(top_n).reset_index(drop=True)
     display_cols = ["Ticker","Signal","Score","Preis","RSI","Momentum %","52w Hoch %","Kaufsignale"]
 
-    styled = top_df[display_cols].style.background_gradient(
-        subset=["Score"], cmap="RdYlGn"
-    ).format({
-        "Score":      "{:.1f}",
-        "Preis":      "{:.2f} €",
-        "RSI":        "{:.1f}",
-        "Momentum %": "{:+.1f}%",
-        "52w Hoch %": "{:+.1f}%",
-    })
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(
+        top_df[display_cols].reset_index(drop=True),
+        use_container_width=True,
+        column_config={
+            "Score":       st.column_config.ProgressColumn("Score", min_value=0, max_value=15, format="%.1f"),
+            "Preis":       st.column_config.NumberColumn("Preis", format="%.2f €"),
+            "RSI":         st.column_config.NumberColumn("RSI", format="%.1f"),
+            "Momentum %":  st.column_config.NumberColumn("Momentum %", format="%+.1f%%"),
+            "52w Hoch %":  st.column_config.NumberColumn("52w Hoch %", format="%+.1f%%"),
+        }
+    )
 
     # ── Full table (collapsed) ────────────────────────────────────────────────
     with st.expander("📊 Alle Aktien anzeigen"):
