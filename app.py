@@ -343,6 +343,14 @@ if st.button("🔍 Scan starten", type="primary"):
     st.session_state["failed"]  = failed
 
 # ── Display results (persistent across reruns) ────────────────────────────────
+# Invalidate stale session state if schema changed (e.g. "Name" column added)
+if "results" in st.session_state:
+    sample = st.session_state["results"]
+    if sample and "Name" not in sample[0]:
+        del st.session_state["results"]
+        st.warning("⚠️ Alte Scan-Daten zurückgesetzt – bitte erneut scannen.")
+        st.stop()
+
 if "results" in st.session_state:
     results = st.session_state["results"]
 
@@ -366,7 +374,8 @@ if "results" in st.session_state:
     st.subheader(f"🚀 Top {top_n} Aktien nach Score")
 
     top_df = df_sorted.head(top_n).reset_index(drop=True)
-    display_cols = ["Ticker","Name","Signal","Score","Preis","RSI","Momentum %","52w Hoch %","Kaufsignale"]
+    wanted_cols = ["Ticker","Name","Signal","Score","Preis","RSI","Momentum %","52w Hoch %","Kaufsignale"]
+    display_cols = [c for c in wanted_cols if c in top_df.columns]
 
     st.dataframe(
         top_df[display_cols].reset_index(drop=True),
