@@ -5,480 +5,267 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(
-    page_title="DAX Trend Scanner Pro",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="SmallCap Radar", page_icon="🔭", layout="wide")
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── Design ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
-
-html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
-h1, h2, h3 { font-family: 'IBM Plex Mono', monospace; }
-
-.signal-buy    { background:#0d3321; color:#00ff88; padding:4px 12px; border-radius:4px; font-weight:600; font-family:monospace; }
-.signal-watch  { background:#2d2800; color:#ffd700; padding:4px 12px; border-radius:4px; font-weight:600; font-family:monospace; }
-.signal-avoid  { background:#2d0d0d; color:#ff4444; padding:4px 12px; border-radius:4px; font-weight:600; font-family:monospace; }
-
-.metric-card {
-    background: #111;
-    border: 1px solid #222;
-    border-radius: 8px;
-    padding: 16px;
-    text-align: center;
-}
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap');
+html, body, [class*="css"] { font-family:'Manrope',sans-serif; font-variant-numeric:tabular-nums; }
+.block-container { padding-top:1.6rem; max-width:1400px; }
+[data-testid="stSidebar"] { background:#14213d; }
+[data-testid="stSidebar"] * { color:#e8edf7 !important; }
+h1 { font-weight:800; letter-spacing:-0.02em; margin-bottom:0; }
+.sub { color:#5b6b8a; margin:0 0 1.2rem 0; }
+.regime { border-radius:10px; padding:12px 18px; margin-bottom:1rem; font-weight:600; }
+.regime.on  { background:#dff3e8; color:#14532d; border-left:6px solid #1f9d55; }
+.regime.off { background:#fde8e4; color:#7a1d10; border-left:6px solid #d9442b; }
+.kpi { background:#fff; border-radius:10px; padding:14px 18px; border:1px solid #dde3ee; }
+.kpi b { display:block; font-size:1.9rem; line-height:1.1; color:#14213d; }
+.kpi span { color:#5b6b8a; font-size:.85rem; }
+.pill { display:inline-block; padding:3px 12px; border-radius:99px; font-weight:700; font-size:.85rem; }
+.p-buy { background:#1f9d55; color:#fff; } .p-watch { background:#f2b632; color:#3b2a00; } .p-avoid { background:#d9442b; color:#fff; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 DAX Trend Scanner Pro")
-st.caption("Technische Analyse · Kaufsignale · Momentum-Ranking")
-
-# ── Sidebar Settings ──────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("⚙️ Parameter")
-    ma_short     = st.slider("MA Kurzfristig",  10, 100, 50)
-    ma_long      = st.slider("MA Langfristig", 100, 300, 200)
-    momentum_days = st.slider("Momentum Tage",   5,  60,  20)
-    top_n        = st.slider("Top N Aktien",     5,  20,  10)
-    rsi_ob       = st.slider("RSI Überkauft",   60,  90,  70)
-    rsi_os       = st.slider("RSI Überverkauft", 10,  40,  30)
-    st.divider()
-    if st.button("🔄 Cache leeren"):
-        st.cache_data.clear()
-        st.success("Cache geleert!")
-
-# ── DAX Universe ──────────────────────────────────────────────────────────────
-DAX_TICKERS = [
-    "ADS.DE","AIR.DE","ALV.DE","BAS.DE","BAYN.DE","BEI.DE",
-    "BMW.DE","BNR.DE","CBK.DE","CON.DE","DB1.DE","DBK.DE",
-    "DHL.DE","DTG.DE","DTE.DE","ENR.DE","EOAN.DE","FME.DE",
-    "FRE.DE","HEI.DE","HEN3.DE","IFX.DE","LIN.DE","MBG.DE",
-    "MRK.DE","MTX.DE","MUV2.DE","P911.DE","QIA.DE","RWE.DE",
-    "SAP.DE","SIE.DE","SY1.DE","VOW3.DE","ZAL.DE","VNA.DE"
-]
-
-DAX_NAMES = {
-    "ADS.DE":  "adidas AG",
-    "AIR.DE":  "Airbus SE",
-    "ALV.DE":  "Allianz SE",
-    "BAS.DE":  "BASF SE",
-    "BAYN.DE": "Bayer AG",
-    "BEI.DE":  "Beiersdorf AG",
-    "BMW.DE":  "BMW AG",
-    "BNR.DE":  "Brenntag SE",
-    "CBK.DE":  "Commerzbank AG",
-    "CON.DE":  "Continental AG",
-    "DB1.DE":  "Deutsche Börse AG",
-    "DBK.DE":  "Deutsche Bank AG",
-    "DHL.DE":  "DHL Group",
-    "DTG.DE":  "Daimler Truck AG",
-    "DTE.DE":  "Deutsche Telekom AG",
-    "ENR.DE":  "Siemens Energy AG",
-    "EOAN.DE": "E.ON SE",
-    "FME.DE":  "Fresenius Medical Care",
-    "FRE.DE":  "Fresenius SE",
-    "HEI.DE":  "Heidelberg Materials AG",
-    "HEN3.DE": "Henkel AG & Co. KGaA",
-    "IFX.DE":  "Infineon Technologies AG",
-    "LIN.DE":  "Linde plc",
-    "MBG.DE":  "Mercedes-Benz Group AG",
-    "MRK.DE":  "Merck KGaA",
-    "MTX.DE":  "MTU Aero Engines AG",
-    "MUV2.DE": "Munich Re",
-    "P911.DE": "Porsche AG",
-    "QIA.DE":  "Qiagen NV",
-    "RWE.DE":  "RWE AG",
-    "SAP.DE":  "SAP SE",
-    "SIE.DE":  "Siemens AG",
-    "SY1.DE":  "Symrise AG",
-    "VOW3.DE": "Volkswagen AG",
-    "ZAL.DE":  "Zalando SE",
-    "VNA.DE":  "Vonovia SE",
+# ── Universum (Small Caps; ungültige Ticker werden automatisch übersprungen) ──
+UNIVERSE = {
+ "USA": ["SMCI","CELH","ONTO","AXON","FIX","MEDP","ANF","BOOT","CVLT","SM","MTDR","AIT","ENSG","HALO","CRDO",
+         "IBP","ALKS","KNSL","LNTH","MOD","SKY","WIRE","BMI","ESE","FELE","GPI","CNX","PTEN","RMBS","SPSC",
+         "QLYS","TMDX","VRNS","AAON","BCC","CALM","CPRX","CRVL","DY","EXLS","GMS","HRI","ITGR","JBT","KTB",
+         "LGND","MGY","NSIT","OSIS","PI","RDNT","STRL","TGTX","UFPI","VCEL","WDFC","XPEL","YOU","ZWS"],
+ "Deutschland": ["AIXA.DE","BC8.DE","COK.DE","DRW3.DE","EVD.DE","FNTN.DE","GBF.DE","HAG.DE","JUN3.DE","KBX.DE",
+         "NDX1.DE","NEM.DE","PBB.DE","PSM.DE","RAA.DE","S92.DE","SFQ.DE","SGL.DE","TKA.DE","TLX.DE",
+         "VBK.DE","WAF.DE","SHA.DE","LEG.DE","HOT.DE","G1A.DE","GXI.DE","DUE.DE","BFSA.DE","AG1.DE"],
+ "Frankreich/Benelux": ["AM.PA","ALO.PA","ELIS.PA","IPS.PA","LR.PA","NXI.PA","OVH.PA","RCO.PA","SOI.PA","TRI.PA",
+         "VIRP.PA","ADYEN.AS","BESI.AS","IMCD.AS","FLOW.AS","TKWY.AS","CRBN.AS","APAM.AS","SBMO.AS","FUR.AS",
+         "ACKB.BR","BEKB.BR","UMI.BR","KIN.BR","MELE.BR"],
+ "Skandinavien": ["EVO.ST","SINCH.ST","BALD-B.ST","INDT.ST","LIFCO-B.ST","NIBE-B.ST","SAAB-B.ST","SWEC-B.ST",
+         "VOLCAR-B.ST","BONAV-B.ST","KOG.OL","NEL.OL","TOM.OL","KIT.OL","AKRBP.OL","NAS.OL","DEMANT.CO",
+         "NETC.CO","RBREW.CO","SYDB.CO","TRYG.CO","SIM.CO","WDH.CO","FSKRS.HE","KEMIRA.HE","VALMT.HE","UPM.HE"],
+ "Süd/Schweiz": ["AMP.MI","BC.MI","BGN.MI","DIA.MI","ERG.MI","IP.MI","REC.MI","SRG.MI","TIP.MI","CLN.SW",
+         "BARN.SW","BUCN.SW","DAE.SW","GALE.SW","INRN.SW","SFSN.SW","SIGN.SW","VZUG.SW","ACX.MC","CIE.MC",
+         "ENG.MC","GRF.MC","IDR.MC","MAP.MC","VIS.MC"],
 }
+BENCH = {"USA": "IWM", "Europa": "IEUS"}
 
-# ── Indicator Functions ───────────────────────────────────────────────────────
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain  = delta.clip(lower=0).rolling(period).mean()
-    loss  = -delta.clip(upper=0).rolling(period).mean()
-    rs    = gain / loss
-    return 100 - (100 / (1 + rs))
+# ── Daten ─────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def load(tickers: tuple):
+    raw = yf.download(list(tickers), period="2y", group_by="ticker",
+                      auto_adjust=True, threads=True, progress=False)
+    out = {}
+    lvl = raw.columns.get_level_values(0).unique() if isinstance(raw.columns, pd.MultiIndex) else []
+    for t in tickers:
+        if t in lvl:
+            d = raw[t].dropna(subset=["Close"])
+            if len(d) >= 210:
+                out[t] = d
+    return out
 
-def compute_macd(series, fast=12, slow=26, signal=9):
-    ema_fast   = series.ewm(span=fast, adjust=False).mean()
-    ema_slow   = series.ewm(span=slow, adjust=False).mean()
-    macd_line  = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram   = macd_line - signal_line
-    return macd_line, signal_line, histogram
+def rsi(s, n=14):
+    d = s.diff()
+    up = d.clip(lower=0).ewm(alpha=1/n, adjust=False).mean()
+    dn = (-d.clip(upper=0)).ewm(alpha=1/n, adjust=False).mean()
+    return 100 - 100 / (1 + up / dn)
 
-def compute_bollinger(series, period=20, std=2):
-    mid   = series.rolling(period).mean()
-    sigma = series.rolling(period).std()
-    return mid, mid + std * sigma, mid - std * sigma
+def atr(d, n=14):
+    tr = pd.concat([d.High - d.Low, (d.High - d.Close.shift()).abs(), (d.Low - d.Close.shift()).abs()], axis=1).max(axis=1)
+    return tr.ewm(alpha=1/n, adjust=False).mean()
 
-def compute_atr(df, period=14):
-    high, low, close = df["High"], df["Low"], df["Close"]
-    tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low  - close.shift()).abs()
-    ], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+def ret(c, n):
+    return c.iloc[-1] / c.iloc[-1 - n] - 1
 
-# ── Data Loading ──────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600)
-def load_all_data(tickers):
-    """Download 1 year of daily data for all tickers in one shot."""
-    raw = yf.download(tickers, period="1y", group_by="ticker", threads=False, progress=False)
-    return raw
-
-def extract_ticker(raw, ticker):
-    """Safely extract single-ticker OHLCV from a possibly MultiIndex DataFrame."""
-    try:
-        if isinstance(raw.columns, pd.MultiIndex):
-            df = raw[ticker].copy()
-        else:
-            df = raw.copy()
-        df = df.dropna(how="all")
-        # Flatten column names if needed
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        return df if not df.empty else None
-    except Exception:
-        return None
-
-# ── Analysis ──────────────────────────────────────────────────────────────────
-def analyze(ticker, raw, ma_short, ma_long, momentum_days, rsi_ob, rsi_os):
-    df = extract_ticker(raw, ticker)
-    if df is None or len(df) < ma_long + 10:
-        return None
-
-    close = df["Close"]
-
-    df["MA_short"]  = close.rolling(ma_short).mean()
-    df["MA_long"]   = close.rolling(ma_long).mean()
-    df["Momentum"]  = close.pct_change(momentum_days)
-    df["RSI"]       = compute_rsi(close)
-    df["MACD"], df["MACD_signal"], df["MACD_hist"] = compute_macd(close)
-    df["BB_mid"], df["BB_upper"], df["BB_lower"]   = compute_bollinger(close)
-    df["ATR"]       = compute_atr(df)
-    df["Vol_avg"]   = df["Volume"].rolling(20).mean()
-
-    df = df.dropna()
-    if df.empty:
-        return None
-
-    r = df.iloc[-1]
-    prev5 = df.iloc[-6:-1]
-
-    # ── Boolean conditions ────────────────────────────────────────────────────
-    trend_ok    = bool(r["Close"] > r["MA_short"] > r["MA_long"])
-    mom_ok      = bool(r["Momentum"] > 0)
-    ma_slope    = bool(r["MA_short"] > prev5["MA_short"].mean())
-    rsi_ok      = bool(rsi_os < r["RSI"] < rsi_ob)
-    macd_ok     = bool(r["MACD"] > r["MACD_signal"])
-    macd_cross  = bool(
-        r["MACD"] > r["MACD_signal"] and
-        prev5.iloc[-1]["MACD"] < prev5.iloc[-1]["MACD_signal"]
+# ── Kennzahlen je Aktie ───────────────────────────────────────────────────────
+def metrics(t, d, region, bench_6m):
+    c, v = d.Close, d.Volume
+    r = c.pct_change().dropna()
+    vol = r.tail(126).std() * np.sqrt(252)
+    ma50, ma200 = c.rolling(50).mean(), c.rolling(200).mean()
+    hi52 = c.tail(252).max()
+    dd = (c.tail(126) / c.tail(126).cummax() - 1).min()
+    a = atr(d)
+    return dict(
+        Ticker=t, Region=region, Preis=c.iloc[-1],
+        mom12_1=c.iloc[-22] / c.iloc[-min(253, len(c))] - 1,
+        mom3m=ret(c, 63), mom1m=ret(c, 21), mom6m=ret(c, 126),
+        RelStärke=ret(c, 126) - bench_6m,
+        Vola=vol, Sharpe=(ret(c, 126) * 2) / vol if vol else 0,
+        AbstandHoch=c.iloc[-1] / hi52 - 1, MaxDD=dd,
+        RSI=rsi(c).iloc[-1], ATR=a.iloc[-1], ATRpct=a.iloc[-1] / c.iloc[-1],
+        Liquidität=(c * v).tail(50).mean(),
+        VolTrend=v.tail(10).mean() / max(v.tail(60).mean(), 1),
+        ÜberMA50=c.iloc[-1] > ma50.iloc[-1], MA50ÜberMA200=ma50.iloc[-1] > ma200.iloc[-1],
+        MA50Steigt=ma50.iloc[-1] > ma50.iloc[-11], ÜberMA200=c.iloc[-1] > ma200.iloc[-1],
     )
-    above_bb_mid = bool(r["Close"] > r["BB_mid"])
-    vol_spike    = bool(r["Volume"] > 1.5 * r["Vol_avg"])
-    near_bb_low  = bool(r["Close"] < r["BB_mid"])
 
-    # ── Composite score ───────────────────────────────────────────────────────
-    score = 0
-    score += 3 if trend_ok      else 0
-    score += 2 if mom_ok        else 0
-    score += 2 if ma_slope      else 0
-    score += 2 if macd_ok       else 0
-    score += 3 if macd_cross    else 0   # fresh crossover = strongest signal
-    score += 1 if rsi_ok        else 0
-    score += 1 if above_bb_mid  else 0
-    score += 1 if vol_spike     else 0
+def score_all(df):
+    rk = lambda s: s.rank(pct=True)
+    trend = (df.ÜberMA50 * .35 + df.MA50ÜberMA200 * .35 + df.MA50Steigt * .3)
+    s = 100 * (.25 * rk(df.mom12_1) + .15 * rk(df.mom3m) + .15 * rk(df.RelStärke) +
+               .15 * trend + .15 * rk(df.Sharpe) + .10 * rk(df.AbstandHoch) + .05 * rk(df.VolTrend))
+    s = s - np.where(df.RSI > 80, 6, 0) - np.where(df.MaxDD < -.35, 5, 0)
+    s = np.where(df.ÜberMA200, s, np.minimum(s, 45))        # kein Kauf unter MA200
+    df["Score"] = np.round(np.clip(s, 0, 100), 1)
+    df["Signal"] = np.select([df.Score >= 70, df.Score >= 55], ["KAUFEN", "BEOBACHTEN"], "MEIDEN")
+    setups = []
+    for _, r in df.iterrows():
+        x = []
+        if r.AbstandHoch > -.03 and r.VolTrend > 1.2: x.append("Ausbruch")
+        if r.ÜberMA200 and r.MA50ÜberMA200 and r.RSI < 45: x.append("Pullback")
+        if r.Score >= 80: x.append("Leader")
+        setups.append(", ".join(x) or "–")
+    df["Setup"] = setups
+    return df
 
-    # Distance-to-MA bonus (max ±2)
-    dist = (r["Close"] - r["MA_short"]) / r["MA_short"]
-    score += float(np.clip(dist * 10, -2, 2))
-
-    # ── Buy signal classification ─────────────────────────────────────────────
-    buy_signals = []
-    if macd_cross:           buy_signals.append("MACD Cross ↑")
-    if trend_ok and mom_ok:  buy_signals.append("Trend + Mom")
-    if near_bb_low and rsi_ok and r["RSI"] < 45: buy_signals.append("BB Bounce")
-    if vol_spike and mom_ok: buy_signals.append("Vol Surge")
-
-    if score >= 9:
-        signal = "🟢 KAUFEN"
-    elif score >= 6:
-        signal = "🟡 BEOBACHTEN"
-    else:
-        signal = "🔴 MEIDEN"
-
-    # 52w data
-    high_52w = close.rolling(252).max().iloc[-1]
-    low_52w  = close.rolling(252).min().iloc[-1]
-    pct_from_high = (r["Close"] - high_52w) / high_52w * 100
-
-    return {
-        "Ticker"        : ticker,
-        "Name"          : DAX_NAMES.get(ticker, ticker),
-        "Signal"        : signal,
-        "Score"         : round(score, 1),
-        "Preis"         : round(float(r["Close"]), 2),
-        "RSI"           : round(float(r["RSI"]), 1),
-        "MACD"          : round(float(r["MACD"]), 3),
-        "Momentum %"    : round(float(r["Momentum"]) * 100, 1),
-        "52w Hoch %"    : round(float(pct_from_high), 1),
-        "Kaufsignale"   : ", ".join(buy_signals) if buy_signals else "—",
-        "Trend"         : trend_ok,
-        "MACD Cross"    : macd_cross,
-        "_df"           : df,          # full df for charting
-    }
+@st.cache_data(ttl=3600, show_spinner=False)
+def run_scan(regions: tuple, extra: tuple):
+    tick = {t: reg for reg in regions for t in UNIVERSE[reg]}
+    tick.update({t: "Eigene" for t in extra})
+    bench = {k: yf.download(v, period="1y", auto_adjust=True, progress=False) for k, v in BENCH.items()}
+    bclose = {k: (b.Close.squeeze() if not b.empty else None) for k, b in bench.items()}
+    data = load(tuple(list(tick) + list(BENCH.values())))
+    rows, hist = [], {}
+    for t, reg in tick.items():
+        if t not in data:
+            continue
+        key = "USA" if reg == "USA" or ("." not in t and reg == "Eigene") else "Europa"
+        b = bclose.get(key)
+        rows.append(metrics(t, data[t], reg, ret(b, 126) if b is not None and len(b) > 130 else 0))
+        hist[t] = data[t]
+    if not rows:
+        return None, {}, {}, list(tick)
+    regime = {}
+    for k, b in bclose.items():
+        if b is not None and len(b) > 200:
+            regime[k] = bool(b.iloc[-1] > b.rolling(200).mean().iloc[-1])
+    return score_all(pd.DataFrame(rows)), hist, regime, [t for t in tick if t not in hist]
 
 # ── Chart ─────────────────────────────────────────────────────────────────────
-def build_chart(result, ma_short, ma_long):
-    df     = result["_df"]
-    ticker = result["Ticker"]
-
-    fig = make_subplots(
-        rows=3, cols=1,
-        shared_xaxes=True,
-        row_heights=[0.55, 0.25, 0.20],
-        vertical_spacing=0.03,
-        subplot_titles=(f"{ticker} – Kurs & Indikatoren", "MACD", "RSI")
-    )
-
-    # Candlestick
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"],
-        increasing_line_color="#00ff88", decreasing_line_color="#ff4444",
-        name="Kurs"
-    ), row=1, col=1)
-
-    # Moving Averages
-    fig.add_trace(go.Scatter(x=df.index, y=df["MA_short"], name=f"MA{ma_short}",
-                             line=dict(color="#00aaff", width=1.5)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["MA_long"],  name=f"MA{ma_long}",
-                             line=dict(color="#ff8800", width=1.5)), row=1, col=1)
-
-    # Bollinger Bands (filled)
-    fig.add_trace(go.Scatter(x=df.index, y=df["BB_upper"], name="BB Upper",
-                             line=dict(color="rgba(150,150,255,0.3)", width=1),
-                             showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["BB_lower"], name="BB Lower",
-                             line=dict(color="rgba(150,150,255,0.3)", width=1),
-                             fill="tonexty",
-                             fillcolor="rgba(150,150,255,0.07)",
-                             showlegend=False), row=1, col=1)
-
-    # MACD
-    colors = ["#00ff88" if v >= 0 else "#ff4444" for v in df["MACD_hist"]]
-    fig.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], name="Histogramm",
-                         marker_color=colors, opacity=0.7), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"],
-                             name="MACD", line=dict(color="#00aaff", width=1.5)), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"],
-                             name="Signal", line=dict(color="#ff8800", width=1.5)), row=2, col=1)
-
-    # RSI
-    fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI",
-                             line=dict(color="#aa88ff", width=1.5)), row=3, col=1)
-    fig.add_hline(y=70, line=dict(color="#ff4444", dash="dash", width=1), row=3, col=1)
-    fig.add_hline(y=30, line=dict(color="#00ff88", dash="dash", width=1), row=3, col=1)
-    fig.add_hline(y=50, line=dict(color="grey",    dash="dot",  width=0.5), row=3, col=1)
-
-    fig.update_layout(
-        height=700,
-        paper_bgcolor="#0a0a0a",
-        plot_bgcolor="#0d0d0d",
-        font=dict(color="#cccccc", family="IBM Plex Mono"),
-        legend=dict(bgcolor="#111", bordercolor="#333", borderwidth=1),
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=10, r=10, t=40, b=10),
-    )
-    for axis in ["xaxis", "xaxis2", "xaxis3", "yaxis", "yaxis2", "yaxis3"]:
-        fig.update_layout(**{axis: dict(gridcolor="#1a1a1a", zerolinecolor="#333")})
-
+def chart(d, row, ma_s, ma_l, stop):
+    c = d.Close
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[.62, .16, .22], vertical_spacing=.025)
+    fig.add_trace(go.Candlestick(x=d.index, open=d.Open, high=d.High, low=d.Low, close=c, name="Kurs",
+                  increasing_line_color="#1f9d55", decreasing_line_color="#d9442b"), 1, 1)
+    for n, col in [(ma_s, "#1f5fbf"), (ma_l, "#e08a00")]:
+        fig.add_trace(go.Scatter(x=d.index, y=c.rolling(n).mean(), name=f"MA{n}", line=dict(color=col, width=1.6)), 1, 1)
+    fig.add_hline(y=stop, line=dict(color="#d9442b", dash="dash", width=1), annotation_text="Stop", row=1, col=1)
+    up = (d.Close >= d.Open)
+    fig.add_trace(go.Bar(x=d.index, y=d.Volume, marker_color=np.where(up, "#9fd8b4", "#f0b3a8"), name="Volumen"), 2, 1)
+    fig.add_trace(go.Scatter(x=d.index, y=rsi(c), name="RSI", line=dict(color="#6b4fbb", width=1.5)), 3, 1)
+    for y, col in [(70, "#d9442b"), (30, "#1f9d55")]:
+        fig.add_hline(y=y, line=dict(color=col, dash="dot", width=1), row=3, col=1)
+    fig.update_layout(height=680, xaxis_rangeslider_visible=False, paper_bgcolor="#f4f6fa", plot_bgcolor="#fff",
+                      font=dict(family="Manrope", color="#14213d"), margin=dict(l=8, r=8, t=10, b=8),
+                      legend=dict(orientation="h", y=1.04))
+    fig.update_xaxes(range=[d.index[-180], d.index[-1]], gridcolor="#eef1f6")
+    fig.update_yaxes(gridcolor="#eef1f6")
     return fig
 
-# ── Signal badge helper ───────────────────────────────────────────────────────
-def signal_html(sig):
-    if "KAUFEN"     in sig: return f'<span class="signal-buy">{sig}</span>'
-    if "BEOBACHTEN" in sig: return f'<span class="signal-watch">{sig}</span>'
-    return f'<span class="signal-avoid">{sig}</span>'
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.header("Filter")
+    regions = st.multiselect("Märkte", list(UNIVERSE), default=["USA", "Deutschland", "Skandinavien"])
+    extra = tuple(x.strip().upper() for x in st.text_input("Eigene Ticker (Komma)", "").split(",") if x.strip())
+    min_liq = st.slider("Mindestumsatz pro Tag (Mio., lokal)", 0.0, 20.0, 1.0, 0.5)
+    min_score = st.slider("Mindest-Score", 0, 90, 0)
+    setup_f = st.multiselect("Setup", ["Ausbruch", "Pullback", "Leader"])
+    st.header("Risiko")
+    capital = st.number_input("Depotgröße", 1000, 10_000_000, 25_000, 1000)
+    risk_pct = st.slider("Risiko pro Trade (%)", 0.25, 3.0, 1.0, 0.25)
+    atr_mult = st.slider("Stop-Abstand (× ATR)", 1.5, 4.0, 2.5, 0.5)
+    st.header("Chart")
+    ma_s = st.slider("MA kurz", 20, 100, 50)
+    ma_l = st.slider("MA lang", 100, 250, 200)
+    if st.button("Daten neu laden"):
+        st.cache_data.clear()
 
-# ── Main UI ───────────────────────────────────────────────────────────────────
-if st.button("🔍 Scan starten", type="primary"):
+# ── Hauptseite ────────────────────────────────────────────────────────────────
+st.title("🔭 SmallCap Radar")
+st.markdown('<p class="sub">Europäische und amerikanische Small Caps, gerankt nach risikoadjustiertem Momentum, Relativer Stärke und Trendqualität.</p>', unsafe_allow_html=True)
 
-    with st.spinner("⏳ Lade Marktdaten für alle DAX-Aktien…"):
-        raw = load_all_data(DAX_TICKERS)
+if not regions and not extra:
+    st.info("Wähle links mindestens einen Markt oder gib eigene Ticker ein.")
+    st.stop()
 
-    if raw is None or raw.empty:
-        st.error("❌ Daten konnten nicht geladen werden.")
-        st.stop()
+with st.spinner("Lade Marktdaten und berechne Scores …"):
+    df, hist, regime, failed = run_scan(tuple(regions), extra)
+if df is None:
+    st.error("Es konnten keine Daten geladen werden. Prüfe die Verbindung und die Ticker.")
+    st.stop()
 
-    results  = []
-    failed   = []
-    progress = st.progress(0, text="Analysiere…")
+cols = st.columns(len(regime) or 1)
+for col, (k, on) in zip(cols, regime.items()):
+    name = "US Small Caps (IWM)" if k == "USA" else "Europa Small Caps (IEUS)"
+    col.markdown(f'<div class="regime {"on" if on else "off"}">{name}: '
+                 f'{"Aufwärtstrend – über MA200, Käufe erlaubt" if on else "unter MA200 – defensiv bleiben"}</div>', unsafe_allow_html=True)
 
-    for i, ticker in enumerate(DAX_TICKERS):
-        res = analyze(ticker, raw, ma_short, ma_long, momentum_days, rsi_ob, rsi_os)
-        if res:
-            results.append(res)
-        else:
-            failed.append(ticker)
-        progress.progress((i + 1) / len(DAX_TICKERS), text=f"Analysiere {ticker}…")
+f = df[(df.Liquidität >= min_liq * 1e6) & (df.Score >= min_score)]
+if setup_f:
+    f = f[f.Setup.apply(lambda s: any(x in s for x in setup_f))]
+f = f.sort_values("Score", ascending=False).reset_index(drop=True)
+f["Stop"] = f.Preis - atr_mult * f.ATR
+f["Stück"] = np.floor((capital * risk_pct / 100) / (f.Preis - f.Stop).clip(lower=1e-9)).astype(int)
+f["Positionswert"] = np.minimum(f.Stück * f.Preis, capital * .25)   # max. 25 % pro Position
+f["Stück"] = np.floor(f.Positionswert / f.Preis).astype(int)
 
-    progress.empty()
+k = st.columns(4)
+for col, (lab, val) in zip(k, [("Analysiert", len(f)), ("Kaufen", (f.Signal == "KAUFEN").sum()),
+                               ("Beobachten", (f.Signal == "BEOBACHTEN").sum()), ("Median 12-1 Momentum", f"{f.mom12_1.median()*100:+.0f} %" if len(f) else "–")]):
+    col.markdown(f'<div class="kpi"><b>{val}</b><span>{lab}</span></div>', unsafe_allow_html=True)
+st.write("")
 
-    if not results:
-        st.error("❌ Keine Aktien analysierbar.")
-        st.stop()
+tab1, tab2, tab3 = st.tabs(["Ranking", "Chart & Positionsgröße", "Risiko-Rendite-Karte"])
 
-    st.session_state["results"] = results
-    st.session_state["failed"]  = failed
+with tab1:
+    show = f[["Ticker", "Region", "Signal", "Score", "Setup", "Preis", "mom12_1", "mom3m", "RelStärke", "Vola", "RSI", "AbstandHoch", "Liquidität"]].copy()
+    for c_ in ["mom12_1", "mom3m", "RelStärke", "Vola", "AbstandHoch"]:
+        show[c_] *= 100
+    show["Liquidität"] /= 1e6
+    st.dataframe(show, use_container_width=True, hide_index=True, height=560, column_config={
+        "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%.0f"),
+        "mom12_1": st.column_config.NumberColumn("Momentum 12-1", format="%+.0f%%"),
+        "mom3m": st.column_config.NumberColumn("3 Monate", format="%+.0f%%"),
+        "RelStärke": st.column_config.NumberColumn("vs. Index (6M)", format="%+.0f%%"),
+        "Vola": st.column_config.NumberColumn("Volatilität", format="%.0f%%"),
+        "AbstandHoch": st.column_config.NumberColumn("Abstand 52W-Hoch", format="%.1f%%"),
+        "Liquidität": st.column_config.NumberColumn("Umsatz/Tag (Mio.)", format="%.1f"),
+        "Preis": st.column_config.NumberColumn(format="%.2f"), "RSI": st.column_config.NumberColumn(format="%.0f"),
+    })
+    if failed:
+        st.caption(f"Keine ausreichenden Daten für: {', '.join(failed)}")
 
-# ── Display results (persistent across reruns) ────────────────────────────────
-# Invalidate stale session state if schema changed (e.g. "Name" column added)
-if "results" in st.session_state:
-    sample = st.session_state["results"]
-    if sample and "Name" not in sample[0]:
-        del st.session_state["results"]
-        st.warning("⚠️ Alte Scan-Daten zurückgesetzt – bitte erneut scannen.")
-        st.stop()
+with tab2:
+    if f.empty:
+        st.info("Kein Treffer – lockere die Filter.")
+    else:
+        sel = st.selectbox("Aktie", f.Ticker, format_func=lambda t: f"{t}  ·  Score {f.loc[f.Ticker == t, 'Score'].iloc[0]:.0f}")
+        r = f[f.Ticker == sel].iloc[0]
+        cls = {"KAUFEN": "p-buy", "BEOBACHTEN": "p-watch", "MEIDEN": "p-avoid"}[r.Signal]
+        st.markdown(f'<span class="pill {cls}">{r.Signal}</span> &nbsp; Setup: <b>{r.Setup}</b>', unsafe_allow_html=True)
+        m = st.columns(5)
+        m[0].metric("Kurs", f"{r.Preis:.2f}")
+        m[1].metric("Stop-Loss", f"{r.Stop:.2f}", f"{(r.Stop / r.Preis - 1) * 100:.1f}%")
+        m[2].metric("Stückzahl", int(r.Stück))
+        m[3].metric("Positionswert", f"{r.Positionswert:,.0f}")
+        m[4].metric("Max. Verlust", f"{r.Stück * (r.Preis - r.Stop):,.0f}")
+        st.plotly_chart(chart(hist[sel], r, ma_s, ma_l, r.Stop), use_container_width=True)
 
-if "results" in st.session_state:
-    results = st.session_state["results"]
+with tab3:
+    if f.empty:
+        st.info("Kein Treffer – lockere die Filter.")
+    else:
+        sc = go.Figure(go.Scatter(
+            x=f.Vola * 100, y=f.mom12_1 * 100, mode="markers+text", text=f.Ticker, textposition="top center",
+            marker=dict(size=np.clip(np.log10(f.Liquidität.clip(lower=1e5)) * 4 - 15, 7, 30), color=f.Score,
+                        colorscale="Blues", cmin=20, cmax=100, showscale=True, colorbar=dict(title="Score"),
+                        line=dict(width=1, color="#14213d")),
+            hovertemplate="%{text}<br>Vola %{x:.0f}%<br>Momentum %{y:+.0f}%<extra></extra>"))
+        sc.add_hline(y=0, line=dict(color="#9aa6bd", dash="dot"))
+        sc.update_layout(height=620, xaxis_title="Volatilität p.a. (%)", yaxis_title="Momentum 12-1 (%)",
+                         paper_bgcolor="#f4f6fa", plot_bgcolor="#fff", font=dict(family="Manrope", color="#14213d"),
+                         margin=dict(l=8, r=8, t=10, b=8))
+        st.plotly_chart(sc, use_container_width=True)
+        st.caption("Oben links ist ideal: hohes Momentum bei geringer Schwankung. Die Blasengröße zeigt die Liquidität.")
 
-    df_all = pd.DataFrame([{k: v for k, v in r.items() if k != "_df"} for r in results])
-    df_sorted = df_all.sort_values("Score", ascending=False)
-
-    # Summary KPIs
-    buys    = (df_all["Signal"].str.contains("KAUFEN")).sum()
-    watches = (df_all["Signal"].str.contains("BEOBACHTEN")).sum()
-    avoids  = (df_all["Signal"].str.contains("MEIDEN")).sum()
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Analysiert",    len(results))
-    c2.metric("🟢 Kaufen",     buys)
-    c3.metric("🟡 Beobachten", watches)
-    c4.metric("🔴 Meiden",     avoids)
-
-    st.divider()
-
-    # ── Top N Table ───────────────────────────────────────────────────────────
-    st.subheader(f"🚀 Top {top_n} Aktien nach Score")
-
-    top_df = df_sorted.head(top_n).reset_index(drop=True)
-    wanted_cols = ["Ticker","Name","Signal","Score","Preis","RSI","Momentum %","52w Hoch %","Kaufsignale"]
-    display_cols = [c for c in wanted_cols if c in top_df.columns]
-
-    st.dataframe(
-        top_df[display_cols].reset_index(drop=True),
-        use_container_width=True,
-        column_config={
-            "Score":       st.column_config.ProgressColumn("Score", min_value=0, max_value=15, format="%.1f"),
-            "Preis":       st.column_config.NumberColumn("Preis", format="%.2f €"),
-            "RSI":         st.column_config.NumberColumn("RSI", format="%.1f"),
-            "Momentum %":  st.column_config.NumberColumn("Momentum %", format="%+.1f%%"),
-            "52w Hoch %":  st.column_config.NumberColumn("52w Hoch %", format="%+.1f%%"),
-        }
-    )
-
-    # ── Full table (collapsed) ────────────────────────────────────────────────
-    with st.expander("📊 Alle Aktien anzeigen"):
-        st.dataframe(
-            df_sorted[display_cols].reset_index(drop=True),
-            use_container_width=True
-        )
-
-    if st.session_state.get("failed"):
-        st.warning(f"⚠️ Übersprungen: {', '.join(st.session_state['failed'])}")
-
-    st.divider()
-
-    # ── Chart Section ─────────────────────────────────────────────────────────
-    st.subheader("📉 Chart-Analyse")
-
-    # Quick-select top picks
-    buy_tickers = df_sorted[df_sorted["Signal"].str.contains("KAUFEN")]["Ticker"].tolist()
-
-    tab1, tab2 = st.tabs(["Top-Picks (Kaufen)", "Alle Aktien"])
-
-    with tab1:
-        if buy_tickers:
-            sel = st.selectbox(
-                "Kaufsignal-Aktie wählen",
-                buy_tickers,
-                format_func=lambda t: f"{t} – {DAX_NAMES.get(t, t)}",
-                key="sel_buy"
-            )
-        else:
-            st.info("Keine Kaufsignale im aktuellen Scan.")
-            sel = None
-
-    with tab2:
-        sel2 = st.selectbox(
-            "Aktie wählen",
-            [r["Ticker"] for r in results],
-            format_func=lambda t: f"{t} – {DAX_NAMES.get(t, t)}",
-            key="sel_all"
-        )
-        sel  = sel2
-
-    if sel:
-        match = next((r for r in results if r["Ticker"] == sel), None)
-        if match:
-            # Signal badge + metrics row
-            sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-            sc1.markdown(signal_html(match["Signal"]), unsafe_allow_html=True)
-            sc2.metric("Score",      match["Score"])
-            sc3.metric("RSI",        match["RSI"])
-            sc4.metric("MACD",       match["MACD"])
-            sc5.metric("Momentum",   f"{match['Momentum %']:+.1f}%")
-
-            if match["Kaufsignale"] != "—":
-                st.success(f"📣 Aktive Kaufsignale: **{match['Kaufsignale']}**")
-
-            st.plotly_chart(
-                build_chart(match, ma_short, ma_long),
-                use_container_width=True
-            )
-
-else:
-    st.info("👆 Klicke **Scan starten** um die Analyse zu beginnen.")
-
-    # Still allow manual chart lookup without scan
-    st.divider()
-    st.subheader("📉 Schnellanalyse (ohne Scan)")
-    sel_quick = st.selectbox("Aktie wählen", DAX_TICKERS, format_func=lambda t: f"{t} – {DAX_NAMES.get(t, t)}")
-    if sel_quick and st.button("Chart laden"):
-        with st.spinner("Lade Daten…"):
-            df_q = yf.download(sel_quick, period="6mo", progress=False)
-            if df_q is not None and not df_q.empty:
-                df_q.columns = [c[0] if isinstance(c, tuple) else c for c in df_q.columns]
-                df_q["MA_short"] = df_q["Close"].rolling(ma_short).mean()
-                df_q["MA_long"]  = df_q["Close"].rolling(ma_long).mean()
-                df_q["RSI"]      = compute_rsi(df_q["Close"])
-                df_q["MACD"], df_q["MACD_signal"], df_q["MACD_hist"] = compute_macd(df_q["Close"])
-                df_q["BB_mid"], df_q["BB_upper"], df_q["BB_lower"]   = compute_bollinger(df_q["Close"])
-                df_q["ATR"] = compute_atr(df_q)
-                df_q["Vol_avg"] = df_q["Volume"].rolling(20).mean()
-
-                fake_result = {
-                    "Ticker": sel_quick,
-                    "Signal": "—",
-                    "Score": "—",
-                    "RSI": round(float(df_q["RSI"].iloc[-1]), 1),
-                    "MACD": round(float(df_q["MACD"].iloc[-1]), 3),
-                    "Momentum %": 0,
-                    "Kaufsignale": "—",
-                    "_df": df_q.dropna()
-                }
-                st.plotly_chart(build_chart(fake_result, ma_short, ma_long), use_container_width=True)
-            else:
-                st.warning("Keine Daten verfügbar.")
+st.caption("Keine Anlageberatung. Daten via Yahoo Finance, ggf. verzögert. Umsätze in Lokalwährung.")
