@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from scipy.optimize import minimize
 from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="SmallCap Radar", page_icon="🔭", layout="wide")
@@ -141,6 +142,31 @@ def run_scan(regions: tuple, extra: tuple):
             regime[k] = bool(b.iloc[-1] > b.rolling(200).mean().iloc[-1])
     return score_all(pd.DataFrame(rows)), hist, regime, [t for t in tick if t not in hist]
 
+# ── Efficient Frontier ────────────────────────────────────────────────────────
+def build_frontier(mu, cov, max_w, rf, n_pts=40):
+    n = len(mu)
+    bnds = [(0, max_w)] * n
+    w0 = np.full(n, 1 / n)
+    fix = {"type": "eq", "fun": lambda w: w.sum() - 1}
+    vol_f = lambda w: np.sqrt(w @ cov @ w)
+
+    mv = minimize(lambda w: w @ cov @ w, w0, bounds=bnds, constraints=[fix], method="SLSQP").x
+    ms = minimize(lambda w: -(w @ mu - rf) / vol_f(w), w0, bounds=bnds, constraints=[fix], method="SLSQP").x
+
+    # größter erreichbarer Ertrag unter der Gewichtsgrenze (gierig füllen)
+    w_max, left = np.zeros(n), 1.0
+    for i in np.argsort(-mu):
+        w_max[i] = min(max_w, left); left -= w_max[i]
+        if left <= 1e-9: break
+
+    pts = []
+    for tgt in np.linspace(mv @ mu, w_max @ mu, n_pts):
+        cons = [fix, {"type": "eq", "fun": lambda w, t=tgt: w @ mu - t}]
+        r = minimize(lambda w: w @ cov @ w, mv, bounds=bnds, constraints=cons, method="SLSQP")
+        if r.success:
+            pts.append((vol_f(r.x), tgt))
+    return mv, ms, pd.DataFrame(pts, columns=["vol", "ret"])
+
 # ── Chart ─────────────────────────────────────────────────────────────────────
 def chart(d, row, ma_s, ma_l, stop):
     c = d.Close
@@ -215,7 +241,7 @@ for col, (lab, val) in zip(k, [("Analysiert", len(f)), ("Kaufen", (f.Signal == "
     col.markdown(f'<div class="kpi"><b>{val}</b><span>{lab}</span></div>', unsafe_allow_html=True)
 st.write("")
 
-tab1, tab2, tab3 = st.tabs(["Ranking", "Chart & Positionsgröße", "Risiko-Rendite-Karte"])
+tab1, tab2, tab3, tab4 = st.tabs(["Ranking", "Chart & Positionsgröße", "Risiko-Rendite-Karte", "Rendite vs. Volatilität"])
 
 with tab1:
     show = f[["Ticker", "Region", "Signal", "Score", "Setup", "Preis", "mom12_1", "mom3m", "RelStärke", "Vola", "RSI", "AbstandHoch", "Liquidität"]].copy()
@@ -267,5 +293,59 @@ with tab3:
                          margin=dict(l=8, r=8, t=10, b=8))
         st.plotly_chart(sc, use_container_width=True)
         st.caption("Oben links ist ideal: hohes Momentum bei geringer Schwankung. Die Blasengröße zeigt die Liquidität.")
+
+with tab4:
+    st.markdown("**1-Jahres-Rendite gegen Volatilität, mit effizientem Rand (Markowitz, nur Long)**")
+    c1, c2, c3 = st.columns(3)
+    n_top = c1.slider("Anzahl Aktien (Top nach Score)", 8, 40, 20)
+    max_w = c2.slider("Max. Gewicht pro Aktie (%)", 5, 50, 15) / 100
+    rf = c3.slider("Risikofreier Zins (%)", 0.0, 6.0, 3.0, 0.25) / 100
+
+    cand = [t for t in f.Ticker.head(n_top) if t in hist]
+    px = pd.DataFrame({t: hist[t].Close for t in cand}).sort_index().ffill().tail(253)
+    px = px.dropna(axis=1).dropna()
+    if px.shape[1] < 5 or max_w * px.shape[1] < 1:
+        st.info("Zu wenige Aktien für die Optimierung: erhöhe die Anzahl oder das maximale Gewicht.")
+    else:
+        rets = px.pct_change().dropna()
+        mu = (px.iloc[-1] / px.iloc[0] - 1).values            # 1-Jahres-Rendite
+        cov = rets.cov().values * 252
+        vol = np.sqrt(np.diag(cov))
+        names = list(px.columns)
+        mv, ms, fr = build_frontier(mu, cov, max_w, rf)
+        pv = lambda w: (np.sqrt(w @ cov @ w) * 100, (w @ mu) * 100)
+
+        fig = go.Figure()
+        sc_map = f.set_index("Ticker").Score
+        fig.add_trace(go.Scatter(x=vol * 100, y=mu * 100, mode="markers+text", text=names, textposition="top center",
+            textfont=dict(size=10), name="Einzelaktien",
+            marker=dict(size=9, color=[sc_map[t] for t in names], colorscale="Blues", cmin=20, cmax=100,
+                        showscale=True, colorbar=dict(title="Score"), line=dict(width=1, color="#14213d")),
+            hovertemplate="%{text}<br>Vola %{x:.0f}%<br>Rendite %{y:+.0f}%<extra></extra>"))
+        fig.add_trace(go.Scatter(x=fr.vol * 100, y=fr.ret * 100, mode="lines", name="Effizienter Rand",
+                                 line=dict(color="#e08a00", width=3)))
+        vs, rs = pv(ms)
+        fig.add_trace(go.Scatter(x=[0, vs * 1.6], y=[rf * 100, rf * 100 + (rs - rf * 100) * 1.6], mode="lines",
+                                 name="Kapitalmarktlinie", line=dict(color="#6b4fbb", dash="dot", width=1.5)))
+        for w, nm, col in [(mv, "Min. Varianz", "#1f9d55"), (ms, "Max. Sharpe", "#d9442b")]:
+            x_, y_ = pv(w)
+            fig.add_trace(go.Scatter(x=[x_], y=[y_], mode="markers", name=nm,
+                                     marker=dict(symbol="star", size=18, color=col, line=dict(width=1.5, color="#14213d"))))
+        fig.add_hline(y=0, line=dict(color="#9aa6bd", dash="dot"))
+        fig.update_layout(height=640, xaxis_title="Volatilität p.a. (%)", yaxis_title="Rendite letzte 12 Monate (%)",
+                          paper_bgcolor="#f4f6fa", plot_bgcolor="#fff", font=dict(family="Manrope", color="#14213d"),
+                          margin=dict(l=8, r=8, t=10, b=8), legend=dict(orientation="h", y=1.07))
+        st.plotly_chart(fig, use_container_width=True)
+
+        a, b = st.columns(2)
+        for col, w, nm in [(a, ms, "Max. Sharpe"), (b, mv, "Min. Varianz")]:
+            v_, r_ = pv(w)
+            col.markdown(f"**{nm}**: Rendite {r_:+.0f} %, Vola {v_:.0f} %, Sharpe {(r_ / 100 - rf) / (v_ / 100):.2f}")
+            wd = pd.DataFrame({"Aktie": names, "Gewicht": w * 100}).query("Gewicht > 0.5").sort_values("Gewicht", ascending=False)
+            col.dataframe(wd, hide_index=True, use_container_width=True,
+                          column_config={"Gewicht": st.column_config.ProgressColumn("Gewicht", min_value=0, max_value=max_w * 100, format="%.1f%%")})
+        st.caption("Die Optimierung nutzt die Vergangenheit als Erwartung und ist damit stark an die Daten angepasst (Overfitting). "
+                   "Sie zeigt, was im letzten Jahr effizient gewesen wäre, nicht was künftig effizient sein wird. "
+                   "Kurse in Lokalwährung, Währungsrisiko ist nicht berücksichtigt.")
 
 st.caption("Keine Anlageberatung. Daten via Yahoo Finance, ggf. verzögert. Umsätze in Lokalwährung.")
